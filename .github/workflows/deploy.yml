@@ -116,12 +116,25 @@ jobs:
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
             -var="image_tag=${{ github.sha }}" \
             -var="create_container_apps=false" || (
-            echo "Apply failed, attempting state recovery..."
-            terraform import -allow-missing-config \
-              azurerm_resource_group.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg" 2>/dev/null || true
-            terraform import -allow-missing-config \
-              azurerm_container_app_environment.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.App/managedEnvironments/${{ secrets.PREFIX }}env" 2>/dev/null || true
-            terraform refresh
+            echo "Apply failed, attempting state recovery with imports..."
+            terraform import \
+              -input=false \
+              azurerm_resource_group.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg" || true
+            terraform import \
+              -input=false \
+              azurerm_container_app_environment.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.App/managedEnvironments/${{ secrets.PREFIX }}env" || true
+            echo "Running terraform refresh..."
+            terraform refresh \
+              -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+              -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+              -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+              -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
+              -var="prefix=${{ secrets.PREFIX }}" \
+              -var="location=${{ secrets.LOCATION }}" \
+              -var="db_password=${{ secrets.DB_PASSWORD }}" \
+              -var="image_tag=${{ github.sha }}" \
+              -var="create_container_apps=false" || true
+            echo "Retrying terraform apply..."
             terraform apply -auto-approve \
               -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
               -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
