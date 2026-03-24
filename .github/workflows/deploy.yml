@@ -301,6 +301,7 @@ jobs:
               --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
               --registry-username ${{ secrets.REGISTRY_NAME }} \
               --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
+              --identity system \
               --set-env-vars "PORT=3001" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
           fi
       
@@ -323,6 +324,7 @@ jobs:
               --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
               --registry-username ${{ secrets.REGISTRY_NAME }} \
               --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
+              --identity system \
               --set-env-vars "PORT=3002" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
           fi
       
@@ -345,6 +347,7 @@ jobs:
               --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
               --registry-username ${{ secrets.REGISTRY_NAME }} \
               --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
+              --identity system \
               --set-env-vars "PORT=8080" "USER_SERVICE_URL=http://${{ secrets.PREFIX }}-user-service.internal.${{ secrets.ENVIRONMENT }}" "PRODUCT_SERVICE_URL=http://${{ secrets.PREFIX }}-product-service.internal.${{ secrets.ENVIRONMENT }}"
           fi
       
@@ -367,6 +370,7 @@ jobs:
               --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
               --registry-username ${{ secrets.REGISTRY_NAME }} \
               --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
+              --identity system \
               --set-env-vars "PORT=3000" "API_GATEWAY_URL=https://${{ secrets.PREFIX }}-api-gateway.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
             az containerapp ingress enable --name ${{ secrets.PREFIX }}-frontend --resource-group ${{ secrets.RESOURCE_GROUP }} --type external --target-port 3000 --transport auto
           fi
@@ -374,6 +378,34 @@ jobs:
       - name: Show Frontend URL
         run: |
           echo "Frontend URL: https://${{ secrets.PREFIX }}-frontend.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
+      
+      # Grant ACR Pull to Container Apps
+      - name: Grant ACR Pull Role
+        run: |
+          for service in user-service product-service api-gateway frontend; do
+            # Get the container app ID
+            APP_ID=$(az containerapp show \
+              --name ${{ secrets.PREFIX }}-$service \
+              --resource-group ${{ secrets.PREFIX }}-rg \
+              --query id \
+              -o tsv 2>/dev/null) || continue
+            
+            # Get managed identity principal ID
+            IDENTITY_ID=$(az containerapp show \
+              --name ${{ secrets.PREFIX }}-$service \
+              --resource-group ${{ secrets.PREFIX }}-rg \
+              --query identity.principalId \
+              -o tsv 2>/dev/null) || continue
+            
+            if [ -n "$IDENTITY_ID" ]; then
+              az role assignment create \
+                --assignee "$IDENTITY_ID" \
+                --scope /subscriptions/${{ env.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.ContainerRegistry/registries/${{ secrets.REGISTRY_NAME }} \
+                --role "AcrPull" || true
+            fi
+          done
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
   # =============================================================================
   # Job 4: Health Check (Post-Deployment)
