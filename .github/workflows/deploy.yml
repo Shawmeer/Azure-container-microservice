@@ -106,67 +106,6 @@ jobs:
         if: github.ref == 'refs/heads/main'
         working-directory: terraform
         run: |
-          # Import existing resources if they exist
-          terraform import \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="prefix=${{ secrets.PREFIX }}" \
-            -var="location=${{ secrets.LOCATION }}" \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
-            -var="image_tag=${{ github.sha }}" \
-            -var="create_container_apps=false" \
-            azurerm_resource_group.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg" 2>/dev/null || true
-          
-          terraform import \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="prefix=${{ secrets.PREFIX }}" \
-            -var="location=${{ secrets.LOCATION }}" \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
-            -var="image_tag=${{ github.sha }}" \
-            -var="create_container_apps=false" \
-            azurerm_container_app_environment.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.App/managedEnvironments/${{ secrets.PREFIX }}env" 2>/dev/null || true
-          
-          terraform import \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="prefix=${{ secrets.PREFIX }}" \
-            -var="location=${{ secrets.LOCATION }}" \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
-            -var="image_tag=${{ github.sha }}" \
-            -var="create_container_apps=false" \
-            module.acr.azurerm_container_registry.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.ContainerRegistry/registries/${{ secrets.REGISTRY_NAME }}" 2>/dev/null || true
-          
-          terraform import \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="prefix=${{ secrets.PREFIX }}" \
-            -var="location=${{ secrets.LOCATION }}" \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
-            -var="image_tag=${{ github.sha }}" \
-            -var="create_container_apps=false" \
-            module.database.azurerm_postgresql_flexible_server.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.DBforPostgreSQL/flexibleServers/${{ secrets.PREFIX }}dbsamir" 2>/dev/null || true
-          
-          terraform import \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="prefix=${{ secrets.PREFIX }}" \
-            -var="location=${{ secrets.LOCATION }}" \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
-            -var="image_tag=${{ github.sha }}" \
-            -var="create_container_apps=false" \
-            module.database.azurerm_postgresql_flexible_server_database.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.DBforPostgreSQL/flexibleServers/${{ secrets.PREFIX }}dbsamir/databases/appdb" 2>/dev/null || true
-          
           terraform apply -auto-approve \
             -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
             -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
@@ -176,7 +115,24 @@ jobs:
             -var="location=${{ secrets.LOCATION }}" \
             -var="db_password=${{ secrets.DB_PASSWORD }}" \
             -var="image_tag=${{ github.sha }}" \
-            -var="create_container_apps=false"
+            -var="create_container_apps=false" || (
+            echo "Apply failed, attempting state recovery..."
+            terraform import -allow-missing-config \
+              azurerm_resource_group.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg" 2>/dev/null || true
+            terraform import -allow-missing-config \
+              azurerm_container_app_environment.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.App/managedEnvironments/${{ secrets.PREFIX }}env" 2>/dev/null || true
+            terraform refresh
+            terraform apply -auto-approve \
+              -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+              -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+              -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+              -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
+              -var="prefix=${{ secrets.PREFIX }}" \
+              -var="location=${{ secrets.LOCATION }}" \
+              -var="db_password=${{ secrets.DB_PASSWORD }}" \
+              -var="image_tag=${{ github.sha }}" \
+              -var="create_container_apps=false"
+          )
         env:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -189,9 +145,9 @@ jobs:
         if: always()
         working-directory: terraform
         run: |
-          echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
-          echo "postgres_host=$(terraform output -raw postgres_host)" >> $GITHUB_OUTPUT
-          echo "frontend_url=$(terraform output -raw frontend_url)" >> $GITHUB_OUTPUT
+          echo "acr_login_server=$(terraform output -raw acr_login_server 2>/dev/null || echo '')" >> $GITHUB_OUTPUT
+          echo "postgres_host=$(terraform output -raw postgres_host 2>/dev/null || echo '')" >> $GITHUB_OUTPUT
+          echo "frontend_url=$(terraform output -raw frontend_url 2>/dev/null || echo '')" >> $GITHUB_OUTPUT
 
   # =============================================================================
   # Job 2: Build & Push Docker Images (Matrix Strategy)
@@ -258,149 +214,173 @@ jobs:
     name: Deploy Container Apps
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    
+
     needs: [terraform, build]
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
+
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
-      
+
       - name: Get ACR credentials
         id: acr
         run: |
           ACR_PASSWORD=$(az acr credential show -n ${{ secrets.REGISTRY_NAME }} --query passwords[0].value -o tsv)
+          ACR_USERNAME=$(az acr credential show -n ${{ secrets.REGISTRY_NAME }} --query username -o tsv)
           echo "ACR_PASSWORD=$ACR_PASSWORD" >> $GITHUB_OUTPUT
-      
+          echo "ACR_USERNAME=$ACR_USERNAME" >> $GITHUB_OUTPUT
+
       - name: Get database hostname
         id: db
         run: |
           DB_HOST=$(az postgres flexible-server show -n ${{ secrets.PREFIX }}dbsamir -g ${{ secrets.PREFIX }}-rg --query fullyQualifiedDomainName -o tsv)
           echo "DB_HOST=$DB_HOST" >> $GITHUB_OUTPUT
-      
+
       # User Service
       - name: Create or update user-service
         run: |
-          if az containerapp show --name ${{ secrets.PREFIX }}-user-service --resource-group ${{ secrets.RESOURCE_GROUP }} &>/dev/null; then
+          if az containerapp show --name ${{ secrets.PREFIX }}-user-service --resource-group ${{ secrets.PREFIX }}-rg &>/dev/null; then
             az containerapp update \
               --name ${{ secrets.PREFIX }}-user-service \
-              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --resource-group ${{ secrets.PREFIX }}-rg \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ steps.acr.outputs.ACR_USERNAME }} \
+              --registry-password ${{ steps.acr.outputs.ACR_PASSWORD }} \
               --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/user-service:latest \
               --set-env-vars "PORT=3001" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
           else
             az containerapp create \
               --name ${{ secrets.PREFIX }}-user-service \
-              --resource-group ${{ secrets.RESOURCE_GROUP }} \
-              --environment ${{ secrets.ENVIRONMENT }} \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/user-service:latest \
+              --resource-group ${{ secrets.PREFIX }}-rg \
+              --environment ${{ secrets.PREFIX }}env \
               --cpu 0.25 --memory 0.5Gi \
-              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
-              --registry-username ${{ secrets.REGISTRY_NAME }} \
-              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
               --identity system \
+              --min-replicas 0 \
+              --max-replicas 1 \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ steps.acr.outputs.ACR_USERNAME }} \
+              --registry-password ${{ steps.acr.outputs.ACR_PASSWORD }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/user-service:latest \
               --set-env-vars "PORT=3001" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
           fi
-      
+
       # Product Service
       - name: Create or update product-service
         run: |
-          if az containerapp show --name ${{ secrets.PREFIX }}-product-service --resource-group ${{ secrets.RESOURCE_GROUP }} &>/dev/null; then
+          if az containerapp show --name ${{ secrets.PREFIX }}-product-service --resource-group ${{ secrets.PREFIX }}-rg &>/dev/null; then
             az containerapp update \
               --name ${{ secrets.PREFIX }}-product-service \
-              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --resource-group ${{ secrets.PREFIX }}-rg \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ steps.acr.outputs.ACR_USERNAME }} \
+              --registry-password ${{ steps.acr.outputs.ACR_PASSWORD }} \
               --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/product-service:latest \
               --set-env-vars "PORT=3002" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
           else
             az containerapp create \
               --name ${{ secrets.PREFIX }}-product-service \
-              --resource-group ${{ secrets.RESOURCE_GROUP }} \
-              --environment ${{ secrets.ENVIRONMENT }} \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/product-service:latest \
+              --resource-group ${{ secrets.PREFIX }}-rg \
+              --environment ${{ secrets.PREFIX }}env \
               --cpu 0.25 --memory 0.5Gi \
-              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
-              --registry-username ${{ secrets.REGISTRY_NAME }} \
-              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
               --identity system \
+              --min-replicas 0 \
+              --max-replicas 1 \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ steps.acr.outputs.ACR_USERNAME }} \
+              --registry-password ${{ steps.acr.outputs.ACR_PASSWORD }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/product-service:latest \
               --set-env-vars "PORT=3002" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
           fi
-      
+
       # API Gateway
       - name: Create or update api-gateway
         run: |
-          if az containerapp show --name ${{ secrets.PREFIX }}-api-gateway --resource-group ${{ secrets.RESOURCE_GROUP }} &>/dev/null; then
+          if az containerapp show --name ${{ secrets.PREFIX }}-api-gateway --resource-group ${{ secrets.PREFIX }}-rg &>/dev/null; then
             az containerapp update \
               --name ${{ secrets.PREFIX }}-api-gateway \
-              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --resource-group ${{ secrets.PREFIX }}-rg \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ steps.acr.outputs.ACR_USERNAME }} \
+              --registry-password ${{ steps.acr.outputs.ACR_PASSWORD }} \
               --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/api-gateway:latest \
-              --set-env-vars "PORT=8080" "USER_SERVICE_URL=http://${{ secrets.PREFIX }}-user-service.internal.${{ secrets.ENVIRONMENT }}" "PRODUCT_SERVICE_URL=http://${{ secrets.PREFIX }}-product-service.internal.${{ secrets.ENVIRONMENT }}"
+              --set-env-vars "PORT=8080" "USER_SERVICE_URL=http://${{ secrets.PREFIX }}-user-service.internal.${{ secrets.PREFIX }}env" "PRODUCT_SERVICE_URL=http://${{ secrets.PREFIX }}-product-service.internal.${{ secrets.PREFIX }}env"
           else
             az containerapp create \
               --name ${{ secrets.PREFIX }}-api-gateway \
-              --resource-group ${{ secrets.RESOURCE_GROUP }} \
-              --environment ${{ secrets.ENVIRONMENT }} \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/api-gateway:latest \
+              --resource-group ${{ secrets.PREFIX }}-rg \
+              --environment ${{ secrets.PREFIX }}env \
               --cpu 0.25 --memory 0.5Gi \
-              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
-              --registry-username ${{ secrets.REGISTRY_NAME }} \
-              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
               --identity system \
-              --set-env-vars "PORT=8080" "USER_SERVICE_URL=http://${{ secrets.PREFIX }}-user-service.internal.${{ secrets.ENVIRONMENT }}" "PRODUCT_SERVICE_URL=http://${{ secrets.PREFIX }}-product-service.internal.${{ secrets.ENVIRONMENT }}"
+              --min-replicas 0 \
+              --max-replicas 1 \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ steps.acr.outputs.ACR_USERNAME }} \
+              --registry-password ${{ steps.acr.outputs.ACR_PASSWORD }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/api-gateway:latest \
+              --set-env-vars "PORT=8080" "USER_SERVICE_URL=http://${{ secrets.PREFIX }}-user-service.internal.${{ secrets.PREFIX }}env" "PRODUCT_SERVICE_URL=http://${{ secrets.PREFIX }}-product-service.internal.${{ secrets.PREFIX }}env"
           fi
-      
+
       # Frontend
       - name: Create or update frontend
         run: |
-          if az containerapp show --name ${{ secrets.PREFIX }}-frontend --resource-group ${{ secrets.RESOURCE_GROUP }} &>/dev/null; then
+          if az containerapp show --name ${{ secrets.PREFIX }}-frontend --resource-group ${{ secrets.PREFIX }}-rg &>/dev/null; then
             az containerapp update \
               --name ${{ secrets.PREFIX }}-frontend \
-              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --resource-group ${{ secrets.PREFIX }}-rg \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ steps.acr.outputs.ACR_USERNAME }} \
+              --registry-password ${{ steps.acr.outputs.ACR_PASSWORD }} \
               --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/frontend:latest \
-              --set-env-vars "PORT=3000" "API_GATEWAY_URL=https://${{ secrets.PREFIX }}-api-gateway.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
+              --set-env-vars "PORT=3000" "API_GATEWAY_URL=https://${{ secrets.PREFIX }}-api-gateway.${{ secrets.PREFIX }}env.azurecontainerapps.io"
           else
             az containerapp create \
               --name ${{ secrets.PREFIX }}-frontend \
-              --resource-group ${{ secrets.RESOURCE_GROUP }} \
-              --environment ${{ secrets.ENVIRONMENT }} \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/frontend:latest \
+              --resource-group ${{ secrets.PREFIX }}-rg \
+              --environment ${{ secrets.PREFIX }}env \
               --cpu 0.25 --memory 0.5Gi \
-              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
-              --registry-username ${{ secrets.REGISTRY_NAME }} \
-              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
               --identity system \
-              --set-env-vars "PORT=3000" "API_GATEWAY_URL=https://${{ secrets.PREFIX }}-api-gateway.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
-            az containerapp ingress enable --name ${{ secrets.PREFIX }}-frontend --resource-group ${{ secrets.RESOURCE_GROUP }} --type external --target-port 3000 --transport auto
+              --min-replicas 0 \
+              --max-replicas 1 \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ steps.acr.outputs.ACR_USERNAME }} \
+              --registry-password ${{ steps.acr.outputs.ACR_PASSWORD }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/frontend:latest \
+              --set-env-vars "PORT=3000" "API_GATEWAY_URL=https://${{ secrets.PREFIX }}-api-gateway.${{ secrets.PREFIX }}env.azurecontainerapps.io"
+            az containerapp ingress enable --name ${{ secrets.PREFIX }}-frontend --resource-group ${{ secrets.PREFIX }}-rg --type external --target-port 3000 --transport auto
           fi
       
-      - name: Show Frontend URL
-        run: |
-          echo "Frontend URL: https://${{ secrets.PREFIX }}-frontend.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
-      
-      # Wait for container apps to be fully provisioned
+      # Wait for container apps to fully initialize
       - name: Wait for container apps
-        run: sleep 30
-      
-      # Grant ACR Pull to Container Apps
+        run: sleep 10
+
+      # Grant ACR Pull Role (as fallback for managed identity-based access)
       - name: Grant ACR Pull Role
         run: |
           for service in user-service product-service api-gateway frontend; do
-            # Get managed identity principal ID
             IDENTITY_ID=$(az containerapp show \
               --name ${{ secrets.PREFIX }}-$service \
               --resource-group ${{ secrets.PREFIX }}-rg \
               --query identity.principalId \
               -o tsv 2>/dev/null) || continue
-            
-            echo "Granting AcrPull to $service (identity: $IDENTITY_ID)"
-            
+
             if [ -n "$IDENTITY_ID" ]; then
-              az role assignment create \
+              # Check if role already assigned
+              existing=$(az role assignment list \
                 --assignee "$IDENTITY_ID" \
                 --scope /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.ContainerRegistry/registries/${{ secrets.REGISTRY_NAME }} \
-                --role "AcrPull" || true
+                --role "AcrPull" 2>/dev/null | jq length)
+
+              if [ "$existing" -eq 0 ]; then
+                echo "Granting AcrPull to $service (identity: $IDENTITY_ID)"
+                az role assignment create \
+                  --assignee "$IDENTITY_ID" \
+                  --scope /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.ContainerRegistry/registries/${{ secrets.REGISTRY_NAME }} \
+                  --role "AcrPull" 2>/dev/null || true
+              fi
             fi
           done
         env:
