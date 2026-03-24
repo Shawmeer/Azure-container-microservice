@@ -11,7 +11,6 @@ terraform {
   
   # Enable Remote Backend for State Persistence
   # Configuration is passed via CLI in GitHub Actions
-  backend "azurerm" {}
 }
 
 provider "azurerm" {
