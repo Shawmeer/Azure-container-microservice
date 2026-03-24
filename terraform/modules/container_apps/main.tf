@@ -54,6 +54,17 @@ resource "azurerm_container_app" "user_service" {
   identity {
     type = "SystemAssigned"
   }
+  
+  registry {
+    server               = var.acr_login_server
+    username             = var.acr_admin_username
+    password_secret_name = "registry-password"
+  }
+
+  secret {
+    name  = "registry-password"
+    value = var.acr_admin_password
+  }
 
   template {
     container {
@@ -99,6 +110,17 @@ resource "azurerm_container_app" "product_service" {
 
   identity {
     type = "SystemAssigned"
+  }
+  
+  registry {
+    server               = var.acr_login_server
+    username             = var.acr_admin_username
+    password_secret_name = "registry-password"
+  }
+
+  secret {
+    name  = "registry-password"
+    value = var.acr_admin_password
   }
 
   template {
@@ -146,6 +168,17 @@ resource "azurerm_container_app" "api_gateway" {
   identity {
     type = "SystemAssigned"
   }
+  
+  registry {
+    server               = var.acr_login_server
+    username             = var.acr_admin_username
+    password_secret_name = "registry-password"
+  }
+
+  secret {
+    name  = "registry-password"
+    value = var.acr_admin_password
+  }
 
   template {
     container {
@@ -179,6 +212,17 @@ resource "azurerm_container_app" "frontend" {
 
   identity {
     type = "SystemAssigned"
+  }
+  
+  registry {
+    server               = var.acr_login_server
+    username             = var.acr_admin_username
+    password_secret_name = "registry-password"
+  }
+
+  secret {
+    name  = "registry-password"
+    value = var.acr_admin_password
   }
 
   template {
