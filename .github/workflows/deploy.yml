@@ -379,17 +379,14 @@ jobs:
         run: |
           echo "Frontend URL: https://${{ secrets.PREFIX }}-frontend.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
       
+      # Wait for container apps to be fully provisioned
+      - name: Wait for container apps
+        run: sleep 30
+      
       # Grant ACR Pull to Container Apps
       - name: Grant ACR Pull Role
         run: |
           for service in user-service product-service api-gateway frontend; do
-            # Get the container app ID
-            APP_ID=$(az containerapp show \
-              --name ${{ secrets.PREFIX }}-$service \
-              --resource-group ${{ secrets.PREFIX }}-rg \
-              --query id \
-              -o tsv 2>/dev/null) || continue
-            
             # Get managed identity principal ID
             IDENTITY_ID=$(az containerapp show \
               --name ${{ secrets.PREFIX }}-$service \
@@ -397,10 +394,12 @@ jobs:
               --query identity.principalId \
               -o tsv 2>/dev/null) || continue
             
+            echo "Granting AcrPull to $service (identity: $IDENTITY_ID)"
+            
             if [ -n "$IDENTITY_ID" ]; then
               az role assignment create \
                 --assignee "$IDENTITY_ID" \
-                --scope /subscriptions/${{ env.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.ContainerRegistry/registries/${{ secrets.REGISTRY_NAME }} \
+                --scope /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.ContainerRegistry/registries/${{ secrets.REGISTRY_NAME }} \
                 --role "AcrPull" || true
             fi
           done
