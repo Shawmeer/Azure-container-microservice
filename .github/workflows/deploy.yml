@@ -106,6 +106,7 @@ jobs:
         if: github.ref == 'refs/heads/main'
         working-directory: terraform
         run: |
+          rm -f terraform/tfplan 2>/dev/null || true
           terraform apply -auto-approve \
             -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
             -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
