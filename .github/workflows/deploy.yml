@@ -73,7 +73,12 @@ jobs:
       
       - name: Terraform Init
         working-directory: terraform
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.BACKEND_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.BACKEND_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=terraform.tfstate"
         env:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -107,19 +112,6 @@ jobs:
         if: github.ref == 'refs/heads/main'
         working-directory: terraform
         run: |
-          # Destroy existing resources first to clean up state
-          terraform destroy -auto-approve \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="prefix=${{ secrets.PREFIX }}" \
-            -var="location=${{ secrets.LOCATION }}" \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
-            -var="image_tag=${{ github.sha }}" \
-            -var="create_container_apps=false" 2>/dev/null || true
-          
-          # Apply fresh (plan file is stale after destroy)
           terraform apply -auto-approve \
             -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
             -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
