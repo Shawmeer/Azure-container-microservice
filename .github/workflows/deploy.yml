@@ -185,6 +185,7 @@ jobs:
               module.database.azurerm_postgresql_flexible_server_database.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg/providers/Microsoft.DBforPostgreSQL/flexibleServers/${{ secrets.PREFIX }}dbsamir/databases/appdb" || true
             
             echo "Running terraform refresh..."
+            rm -f terraform/tfplan 2>/dev/null || true
             terraform refresh \
               -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
               -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
@@ -195,7 +196,19 @@ jobs:
               -var="db_password=${{ secrets.DB_PASSWORD }}" \
               -var="image_tag=${{ github.sha }}" \
               -var="create_container_apps=false" || true
-            echo "Retrying terraform apply..."
+            echo "Retrying terraform apply with fresh plan..."
+            terraform plan \
+              -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+              -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+              -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+              -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
+              -var="prefix=${{ secrets.PREFIX }}" \
+              -var="location=${{ secrets.LOCATION }}" \
+              -var="db_password=${{ secrets.DB_PASSWORD }}" \
+              -var="image_tag=${{ github.sha }}" \
+              -var="create_container_apps=false" \
+              -out=tfplan || true
+            
             terraform apply -auto-approve \
               -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
               -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
