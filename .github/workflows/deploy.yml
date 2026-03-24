@@ -1,321 +1,601 @@
-# =============================================================================
-# Production-Grade CI/CD Pipeline for Azure Container Apps
-# =============================================================================
-# Features:
-# - Azure authentication via Service Principal
-# - Matrix strategy for parallel Docker builds  
-# - Terraform for infrastructure
-# - Azure CLI for Container Apps (after images exist)
-# =============================================================================
+# GitHub Actions CI/CD Pipeline for Azure Container Apps
+# This workflow deploys a complete microservice architecture to Azure
 
 name: Deploy to Azure Container Apps
 
+# Trigger on push to main and on manual workflow dispatch
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+    paths:
+      - 'services/**'
+      - 'frontend/**'
+      - 'terraform/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      rollback:
+        description: 'Rollback to previous version'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
-# Concurrency: Cancel in-progress runs for the same branch
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+# Environment variables
+env:
+  TERRAFORM_VERSION: '1.6.6'
+  AZURE_CLI_VERSION: '2.56.0'
+  DOCKER_BUILDKIT: '1'
+
+# Set permissions for OIDC authentication
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
 
 jobs:
   # =============================================================================
-  # Job 1: Terraform - Infrastructure Provisioning (ACR, DB, Environment)
+  # INFRASTRUCTURE DEPLOYMENT JOB
   # =============================================================================
-  terraform:
-    name: Terraform
+  infrastructure:
+    name: Deploy Infrastructure (Terraform)
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: ${{ github.event.inputs.environment || 'production' }}
     
     outputs:
+      resource_group: ${{ steps.terraform.outputs.resource_group }}
       acr_login_server: ${{ steps.terraform.outputs.acr_login_server }}
       postgres_host: ${{ steps.terraform.outputs.postgres_host }}
-      frontend_url: ${{ steps.terraform.outputs.frontend_url }}
+      key_vault_uri: ${{ steps.terraform.outputs.key_vault_uri }}
+      container_apps_env: ${{ steps.terraform.outputs.container_apps_env }}
     
     steps:
+      # Checkout repository
       - name: Checkout
         uses: actions/checkout@v4
-      
-      - name: Azure Login
-        uses: azure/login@v1
         with:
-          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
-      
+          fetch-depth: 0
+
+      # Download Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: '1.7.0'
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
-      
+
+      # Azure Login with OIDC
+      - name: Azure Login (OIDC)
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-opss: true
+
+      # Get OIDC token for Terraform
+      - name: OIDC Token for Terraform
+        id: oidc
+        run: |
+          echo "TOKEN=$(az account get-access-token --query accessToken -o tsv)" >> $GITHUB_OUTPUT
+
+      # Configure Terraform backend
+      - name: Configure Terraform Backend
+        run: |
+          # Create terraform backend config
+          cat > terraform/backend.tf <<EOF
+          terraform {
+            backend "local" {
+              path = "terraform.tfstate"
+            }
+          }
+          EOF
+
+      # Terraform Init
       - name: Terraform Init
-        working-directory: terraform
-        run: terraform init
-        env:
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      
+        working-directory: ./terraform
+        run: |
+          terraform init -upgrade
+
+      # Terraform Validate
+      - name: Terraform Validate
+        working-directory: ./terraform
+        run: |
+          terraform validate
+
+      # Terraform Plan
+      - name: Terraform Plan
+        working-directory: ./terraform
+        id: plan
+        run: |
+          PLAN=$(terraform plan -no-color -out=tfplan)
+          echo "$PLAN"
+          echo "$PLAN" | grep -q "No changes." && echo "changes=false" >> $GITHUB_OUTPUT || echo "changes=true" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      # Terraform Apply (on main branch push only)
       - name: Terraform Apply
-        working-directory: terraform
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: ./terraform
         run: |
-          # First destroy any existing resources to start fresh
-          terraform destroy -auto-approve \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="prefix=${{ secrets.PREFIX }}" \
-            -var="location=${{ secrets.LOCATION }}" \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
-            -var="create_container_apps=false" 2>/dev/null || true
-          
-          # Now apply fresh
-          terraform apply -auto-approve \
-            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -var="prefix=${{ secrets.PREFIX }}" \
-            -var="location=${{ secrets.LOCATION }}" \
-            -var="db_password=${{ secrets.DB_PASSWORD }}" \
-            -var="create_container_apps=false"
-        env:
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      
-      - name: Extract Outputs
+          terraform apply -auto-approve tfplan
+
+      # Get Terraform outputs
+      - name: Get Terraform Outputs
         id: terraform
-        working-directory: terraform
+        working-directory: ./terraform
         run: |
+          echo "resource_group=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
           echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
           echo "postgres_host=$(terraform output -raw postgres_host)" >> $GITHUB_OUTPUT
+          echo "key_vault_uri=$(terraform output -raw key_vault_uri)" >> $GITHUB_OUTPUT
+          echo "container_apps_env=$(terraform output -raw container_apps_environment_name)" >> $GITHUB_OUTPUT
+
+      # Save Terraform state for later jobs
+      - name: Save Terraform State
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-state
+          path: terraform/
+          retention-days: 1
 
   # =============================================================================
-  # Job 2: Build & Push Docker Images (Matrix Strategy)
+  # DOCKER BUILD AND PUSH JOB
   # =============================================================================
-  build:
-    name: Build ${{ matrix.service }}
+  build-and-push:
+    name: Build and Push Docker Images
     runs-on: ubuntu-latest
+    needs: infrastructure
+    environment: ${{ github.event.inputs.environment || 'production' }}
     
-    needs: terraform
-    
-    strategy:
-      matrix:
-        service:
-          - user-service
-          - product-service
-          - api-gateway
-          - frontend
-        include:
-          - service: user-service
-            context: ./services/user-service
-            port: 3001
-          - service: product-service
-            context: ./services/product-service
-            port: 3002
-          - service: api-gateway
-            context: ./services/api-gateway
-            port: 8080
-          - service: frontend
-            context: ./frontend
-            port: 3000
+    outputs:
+      user-service-image: ${{ steps.push.outputs.user-service-image }}
+      product-service-image: ${{ steps.push.outputs.product-service-image }}
+      api-gateway-image: ${{ steps.push.outputs.api-gateway-image }}
+      frontend-image: ${{ steps.push.outputs.frontend-image }}
+      image-tag: ${{ steps.tag.outputs.image-tag }}
     
     steps:
+      # Checkout repository
       - name: Checkout
         uses: actions/checkout@v4
-      
+
+      # Azure Login with OIDC
+      - name: Azure Login (OIDC)
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Azure Container Registry Login
+      - name: ACR Login
+        run: |
+          az acr login --name ${{ needs.infrastructure.outputs.acr_login_server }}
+
+      # Set up Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
-      - name: Azure Login
-        uses: azure/login@v1
+
+      # Generate image tag
+      - name: Generate Image Tag
+        id: tag
+        run: |
+          # Use short SHA + timestamp for unique tags
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          SHORT_SHA=${GITHUB_SHA:0:8}
+          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
+          
+          # Also create 'latest' tag for main branch
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+            echo "latest-tag=latest" >> $GITHUB_OUTPUT
+          else
+            echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          fi
+
+      # Cache Docker layers
+      - name: Cache Docker layers
+        uses: actions/cache@v4
         with:
-          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
-      
-      - name: Login to Azure Container Registry
-        run: az acr login -n ${{ secrets.REGISTRY_NAME }}
-      
-      - name: Build and Push ${{ matrix.service }}
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          push: true
-          tags: |
-            ${{ secrets.REGISTRY_NAME }}.azurecr.io/${{ matrix.service }}:${{ github.sha }}
-            ${{ secrets.REGISTRY_NAME }}.azurecr.io/${{ matrix.service }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            PORT=${{ matrix.port }}
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      # Build and Push User Service
+      - name: Build and Push User Service
+        id: push
+        working-directory: ./services/user-service
+        run: |
+          docker buildx build \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --tag ${{ needs.infrastructure.outputs.acr_login_server }}/user-service:${{ steps.tag.outputs.image-tag }} \
+            --push \
+            .
+          
+          echo "user-service-image=${{ needs.infrastructure.outputs.acr_login_server }}/user-service:${{ steps.tag.outputs.image-tag }}" >> $GITHUB_OUTPUT
+
+      # Move cache for next image
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # Build and Push Product Service
+      - name: Build and Push Product Service
+        working-directory: ./services/product-service
+        run: |
+          docker buildx build \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --tag ${{ needs.infrastructure.outputs.acr_login_server }}/product-service:${{ steps.tag.outputs.image-tag }} \
+            --push \
+            .
+          
+          echo "product-service-image=${{ needs.infrastructure.outputs.acr_login_server }}/product-service:${{ steps.tag.outputs.image-tag }}" >> $GITHUB_OUTPUT
+
+      # Move cache again
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # Build and Push API Gateway
+      - name: Build and Push API Gateway
+        working-directory: ./services/api-gateway
+        run: |
+          docker buildx build \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --tag ${{ needs.infrastructure.outputs.acr_login_server }}/api-gateway:${{ steps.tag.outputs.image-tag }} \
+            --push \
+            .
+          
+          echo "api-gateway-image=${{ needs.infrastructure.outputs.acr_login_server }}/api-gateway:${{ steps.tag.outputs.image-tag }}" >> $GITHUB_OUTPUT
+
+      # Move cache again
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      # Build and Push Frontend
+      - name: Build and Push Frontend
+        working-directory: ./frontend
+        run: |
+          docker buildx build \
+            --cache-from type=local,src=/tmp/.buildx-cache \
+            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            --tag ${{ needs.infrastructure.outputs.acr_login_server }}/frontend:${{ steps.tag.outputs.image-tag }} \
+            --push \
+            .
+          
+          echo "frontend-image=${{ needs.infrastructure.outputs.acr_login_server }}/frontend:${{ steps.tag.outputs.image-tag }}" >> $GITHUB_OUTPUT
+
+      # Cleanup cache
+      - name: Cleanup Docker cache
+        run: |
+          rm -rf /tmp/.buildx-cache /tmp/.buildx-cache-new
 
   # =============================================================================
-  # Job 3: Deploy Container Apps
+  # DEPLOY TO CONTAINER APPS JOB
   # =============================================================================
-  deploy-container-apps:
-    name: Deploy Container Apps
+  deploy:
+    name: Deploy to Azure Container Apps
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    needs: [terraform, build]
+    needs: [infrastructure, build-and-push]
+    environment: ${{ github.event.inputs.environment || 'production' }}
     
     steps:
+      # Checkout repository
       - name: Checkout
         uses: actions/checkout@v4
-      
-      - name: Azure Login
+
+      # Azure Login with OIDC
+      - name: Azure Login (OIDC)
         uses: azure/login@v1
         with:
-          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
-      
-      - name: Get ACR credentials
-        id: acr
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Get secrets from Key Vault
+      - name: Get Secrets from Key Vault
+        id: kv-secrets
         run: |
-          ACR_PASSWORD=$(az acr credential show -n ${{ secrets.REGISTRY_NAME }} --query passwords[0].value -o tsv)
-          echo "ACR_PASSWORD=$ACR_PASSWORD" >> $GITHUB_OUTPUT
-      
-      - name: Get database hostname
-        id: db
+          # Get database password
+          DB_PASSWORD=$(az keyvault secret show \
+            --vault-name microservicekv \
+            --name db-password \
+            --query value \
+            -o tsv)
+          echo "db-password=$DB_PASSWORD" >> $GITHUB_OUTPUT
+          
+          # Get ACR password
+          ACR_PASSWORD=$(az keyvault secret show \
+            --vault-name microservicekv \
+            --name acr-password \
+            --query value \
+            -o tsv)
+          echo "acr-password=$ACR_PASSWORD" >> $GITHUB_OUTPUT
+
+      # Determine deployment strategy (new deployment or rollback)
+      - name: Determine Deployment Strategy
+        id: deploy-strategy
         run: |
-          DB_HOST=$(az postgres flexible-server show -n ${{ secrets.PREFIX }}dbsamir -g ${{ secrets.PREFIX }}-rg --query fullyQualifiedDomainName -o tsv)
-          echo "DB_HOST=$DB_HOST" >> $GITHUB_OUTPUT
-      
-      # User Service
-      - name: Create or update user-service
-        run: |
-          if az containerapp show --name ${{ secrets.PREFIX }}-user-service --resource-group ${{ secrets.PREFIX }}-rg &>/dev/null; then
-            az containerapp update \
-              --name ${{ secrets.PREFIX }}-user-service \
-              --resource-group ${{ secrets.PREFIX }}-rg \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/user-service:latest \
-              --set-env-vars "PORT=3001" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
+          if [ "${{ github.event.inputs.rollback }}" == "true" ]; then
+            echo "strategy=rollback" >> $GITHUB_OUTPUT
+            # Get previous image tag from git tags
+            PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            echo "image-tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
           else
-            az containerapp create \
-              --name ${{ secrets.PREFIX }}-user-service \
-              --resource-group ${{ secrets.PREFIX }}-rg \
-              --environment ${{ secrets.ENVIRONMENT }} \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/user-service:latest \
-              --cpu 0.25 --memory 0.5Gi \
-              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
-              --registry-username ${{ secrets.REGISTRY_NAME }} \
-              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
-              --min-replicas 0 \
-              --max-replicas 1 \
-              --set-env-vars "PORT=3001" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
+            echo "strategy=new-deployment" >> $GITHUB_OUTPUT
+            echo "image-tag=${{ needs.build-and-push.outputs.image-tag }}" >> $GITHUB_OUTPUT
           fi
-      
-      # Product Service
-      - name: Create or update product-service
+
+      # Deploy User Service
+      - name: Deploy User Service
         run: |
-          if az containerapp show --name ${{ secrets.PREFIX }}-product-service --resource-group ${{ secrets.PREFIX }}-rg &>/dev/null; then
-            az containerapp update \
-              --name ${{ secrets.PREFIX }}-product-service \
-              --resource-group ${{ secrets.PREFIX }}-rg \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/product-service:latest \
-              --set-env-vars "PORT=3002" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
-          else
-            az containerapp create \
-              --name ${{ secrets.PREFIX }}-product-service \
-              --resource-group ${{ secrets.PREFIX }}-rg \
-              --environment ${{ secrets.ENVIRONMENT }} \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/product-service:latest \
-              --cpu 0.25 --memory 0.5Gi \
-              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
-              --registry-username ${{ secrets.REGISTRY_NAME }} \
-              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
-              --min-replicas 0 \
-              --max-replicas 1 \
-              --set-env-vars "PORT=3002" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
-          fi
-      
-      # API Gateway
-      - name: Create or update api-gateway
+          az containerapp update \
+            --name microservice-user-service \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }} \
+            --image ${{ needs.infrastructure.outputs.acr_login_server }}/user-service:${{ steps.deploy-strategy.outputs.image-tag }} \
+            --set-env-vars \
+              PORT=3001 \
+              DB_HOST=${{ needs.infrastructure.outputs.postgres_host }} \
+              DB_PORT=5432 \
+              DB_NAME=appdb \
+              DB_USER=appuser \
+              DB_PASSWORD="${{ steps.kv-secrets.outputs.db-password }}" \
+            --min-replicas 1 \
+            --max-replicas 3
+
+      # Deploy Product Service
+      - name: Deploy Product Service
         run: |
-          if az containerapp show --name ${{ secrets.PREFIX }}-api-gateway --resource-group ${{ secrets.PREFIX }}-rg &>/dev/null; then
-            az containerapp update \
-              --name ${{ secrets.PREFIX }}-api-gateway \
-              --resource-group ${{ secrets.PREFIX }}-rg \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/api-gateway:latest \
-              --set-env-vars "PORT=8080" "USER_SERVICE_URL=http://${{ secrets.PREFIX }}-user-service.internal.${{ secrets.ENVIRONMENT }}" "PRODUCT_SERVICE_URL=http://${{ secrets.PREFIX }}-product-service.internal.${{ secrets.ENVIRONMENT }}"
-          else
-            az containerapp create \
-              --name ${{ secrets.PREFIX }}-api-gateway \
-              --resource-group ${{ secrets.PREFIX }}-rg \
-              --environment ${{ secrets.ENVIRONMENT }} \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/api-gateway:latest \
-              --cpu 0.25 --memory 0.5Gi \
-              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
-              --registry-username ${{ secrets.REGISTRY_NAME }} \
-              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
-              --min-replicas 0 \
-              --max-replicas 1 \
-              --set-env-vars "PORT=8080" "USER_SERVICE_URL=http://${{ secrets.PREFIX }}-user-service.internal.${{ secrets.ENVIRONMENT }}" "PRODUCT_SERVICE_URL=http://${{ secrets.PREFIX }}-product-service.internal.${{ secrets.ENVIRONMENT }}"
-          fi
-      
-      # Frontend
-      - name: Create or update frontend
+          az containerapp update \
+            --name microservice-product-service \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }} \
+            --image ${{ needs.infrastructure.outputs.acr_login_server }}/product-service:${{ steps.deploy-strategy.outputs.image-tag }} \
+            --set-env-vars \
+              PORT=3002 \
+              DB_HOST=${{ needs.infrastructure.outputs.postgres_host }} \
+              DB_PORT=5432 \
+              DB_NAME=appdb \
+              DB_USER=appuser \
+              DB_PASSWORD="${{ steps.kv-secrets.outputs.db-password }}" \
+            --min-replicas 1 \
+            --max-replicas 3
+
+      # Deploy API Gateway
+      - name: Deploy API Gateway
         run: |
-          if az containerapp show --name ${{ secrets.PREFIX }}-frontend --resource-group ${{ secrets.PREFIX }}-rg &>/dev/null; then
-            az containerapp update \
-              --name ${{ secrets.PREFIX }}-frontend \
-              --resource-group ${{ secrets.PREFIX }}-rg \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/frontend:latest \
-              --set-env-vars "PORT=3000" "API_GATEWAY_URL=https://${{ secrets.PREFIX }}-api-gateway.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
-          else
-            az containerapp create \
-              --name ${{ secrets.PREFIX }}-frontend \
-              --resource-group ${{ secrets.PREFIX }}-rg \
-              --environment ${{ secrets.ENVIRONMENT }} \
-              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/frontend:latest \
-              --cpu 0.25 --memory 0.5Gi \
-              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
-              --registry-username ${{ secrets.REGISTRY_NAME }} \
-              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
-              --min-replicas 0 \
-              --max-replicas 1 \
-              --set-env-vars "PORT=3000" "API_GATEWAY_URL=https://${{ secrets.PREFIX }}-api-gateway.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
-            az containerapp ingress enable --name ${{ secrets.PREFIX }}-frontend --resource-group ${{ secrets.PREFIX }}-rg --type external --target-port 3000 --transport auto
-          fi
-      
-      - name: Show Frontend URL
+          az containerapp update \
+            --name microservice-api-gateway \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }} \
+            --image ${{ needs.infrastructure.outputs.acr_login_server }}/api-gateway:${{ steps.deploy-strategy.outputs.image-tag }} \
+            --set-env-vars \
+              PORT=8080 \
+              USER_SERVICE_URL=http://microservice-user-service.internal.${{ needs.infrastructure.outputs.container_apps_env }} \
+              PRODUCT_SERVICE_URL=http://microservice-product-service.internal.${{ needs.infrastructure.outputs.container_apps_env }} \
+            --min-replicas 1 \
+            --max-replicas 3
+
+      # Deploy Frontend
+      - name: Deploy Frontend
         run: |
-          echo "Frontend URL: https://${{ secrets.PREFIX }}-frontend.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
+          az containerapp update \
+            --name microservice-frontend \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }} \
+            --image ${{ needs.infrastructure.outputs.acr_login_server }}/frontend:${{ steps.deploy-strategy.outputs.image-tag }} \
+            --set-env-vars \
+              PORT=3000 \
+              API_GATEWAY_URL=https://microservice-api-gateway.${{ needs.infrastructure.outputs.container_apps_env }}.azurecontainerapps.io \
+            --min-replicas 1 \
+            --max-replicas 3
 
   # =============================================================================
-  # Job 4: Health Check
+  # HEALTH CHECK VERIFICATION JOB
   # =============================================================================
-  healthcheck:
-    name: Health Check
+  health-check:
+    name: Health Check Verification
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    needs: [terraform, build, deploy-container-apps]
+    needs: [infrastructure, deploy]
+    environment: ${{ github.event.inputs.environment || 'production' }}
     
     steps:
+      # Azure Login with OIDC
+      - name: Azure Login (OIDC)
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Wait for containers to be ready
       - name: Wait for deployment
-        run: sleep 30
-      
+        run: |
+          # Wait for user service
+          echo "Waiting for User Service..."
+          for i in {1..30}; do
+            STATUS=$(az containerapp show \
+              --name microservice-user-service \
+              --resource-group ${{ needs.infrastructure.outputs.resource_group }} \
+              --query provisioningState \
+              -o tsv)
+            if [ "$STATUS" == "Ready" ]; then
+              echo "User Service is ready"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+
+      # Check User Service health
+      - name: Check User Service Health
+        run: |
+          USER_SERVICE_URL=$(az containerapp show \
+            --name microservice-user-service \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }} \
+            --query properties.fqdn \
+            -o tsv)
+          
+          echo "Checking User Service health at: http://${USER_SERVICE_URL}:3001/health"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${USER_SERVICE_URL}:3001/health || echo "000")
+          echo "User Service health check: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Health check failed for User Service"
+            exit 1
+          fi
+
+      # Check Product Service health
+      - name: Check Product Service Health
+        run: |
+          PRODUCT_SERVICE_URL=$(az containerapp show \
+            --name microservice-product-service \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }} \
+            --query properties.fqdn \
+            -o tsv)
+          
+          echo "Checking Product Service health at: http://${PRODUCT_SERVICE_URL}:3002/health"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${PRODUCT_SERVICE_URL}:3002/health || echo "000")
+          echo "Product Service health check: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Health check failed for Product Service"
+            exit 1
+          fi
+
+      # Check API Gateway health
+      - name: Check API Gateway Health
+        run: |
+          API_GATEWAY_URL=$(az containerapp show \
+            --name microservice-api-gateway \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }} \
+            --query properties.fqdn \
+            -o tsv)
+          
+          echo "Checking API Gateway health at: http://${API_GATEWAY_URL}:8080/health"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${API_GATEWAY_URL}:8080/health || echo "000")
+          echo "API Gateway health check: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Health check failed for API Gateway"
+            exit 1
+          fi
+
+      # Check Frontend health
       - name: Check Frontend Health
         run: |
-          URL="https://${{ secrets.PREFIX }}-frontend.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
-          echo "Checking: $URL"
+          FRONTEND_URL=$(az containerapp show \
+            --name microservice-frontend \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }} \
+            --query properties.fqdn \
+            -o tsv)
           
-          for i in {1..10}; do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "000")
-            echo "Attempt $i: HTTP $HTTP_CODE"
-            
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "Frontend is healthy!"
-              exit 0
-            fi
-            
-            sleep 10
-          done
+          echo "Checking Frontend health at: http://${FRONTEND_URL}:3000"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${FRONTEND_URL}:3000 || echo "000")
+          echo "Frontend health check: $HTTP_CODE"
           
-          echo "Frontend health check failed!"
-          exit 1
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "304" ]; then
+            echo "Health check failed for Frontend"
+            exit 1
+          fi
+
+      # Display deployment URLs
+      - name: Display Deployment Information
+        run: |
+          echo "=========================================="
+          echo "Deployment Successful!"
+          echo "=========================================="
+          echo ""
+          echo "Frontend URL: https://$(az containerapp show --name microservice-frontend --resource-group ${{ needs.infrastructure.outputs.resource_group }} --query properties.fqdn -o tsv)"
+          echo "API Gateway: https://$(az containerapp show --name microservice-api-gateway --resource-group ${{ needs.infrastructure.outputs.resource_group }} --query properties.fqdn -o tsv)"
+          echo "=========================================="
+
+  # =============================================================================
+  # ROLLBACK JOB (Manual Trigger)
+  # =============================================================================
+  rollback:
+    name: Rollback to Previous Version
+    runs-on: ubuntu-latest
+    needs: [infrastructure]
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    if: github.event.inputs.rollback == 'true'
+    
+    steps:
+      # Checkout repository
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Azure Login with OIDC
+      - name: Azure Login (OIDC)
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Get previous git tag
+      - name: Get Previous Tag
+        id: previous-tag
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null)
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "No previous tags found"
+            PREVIOUS_TAG=$(git log --oneline -10 | tail -1 | cut -d' ' -f1)
+          fi
+          echo "Rolling back to: $PREVIOUS_TAG"
+          echo "rollback-tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+
+      # Rollback User Service
+      - name: Rollback User Service
+        run: |
+          az containerapp revision restart \
+            --name microservice-user-service \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }}
+
+      # Rollback Product Service
+      - name: Rollback Product Service
+        run: |
+          az containerapp revision restart \
+            --name microservice-product-service \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }}
+
+      # Rollback API Gateway
+      - name: Rollback API Gateway
+        run: |
+          az containerapp revision restart \
+            --name microservice-api-gateway \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }}
+
+      # Rollback Frontend
+      - name: Rollback Frontend
+        run: |
+          az containerapp revision restart \
+            --name microservice-frontend \
+            --resource-group ${{ needs.infrastructure.outputs.resource_group }}
+
+      - name: Display Rollback Information
+        run: |
+          echo "=========================================="
+          echo "Rollback Completed!"
+          echo "=========================================="
+          echo "Rolled back to: ${{ steps.previous-tag.outputs.rollback-tag }}"
+          echo "=========================================="

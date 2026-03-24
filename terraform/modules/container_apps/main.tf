@@ -18,8 +18,8 @@ variable "acr_admin_username" {
 }
 
 variable "acr_admin_password" {
-  type      = string
-  sensitive = true
+  type        = string
+  sensitive   = true
   description = "ACR admin password (for reference only)"
 }
 
@@ -46,15 +46,15 @@ variable "image_tag" {
 
 # User Service Container App
 resource "azurerm_container_app" "user_service" {
-  name                = "${var.prefix}-user-service"
-  resource_group_name = var.resource_group_name
+  name                         = "${var.prefix}-user-service"
+  resource_group_name          = var.resource_group_name
   container_app_environment_id = var.environment_id
-  revision_mode       = "Single"
+  revision_mode                = "Single"
 
   identity {
     type = "SystemAssigned"
   }
-  
+
   registry {
     server               = var.acr_login_server
     username             = var.acr_admin_username
@@ -68,11 +68,11 @@ resource "azurerm_container_app" "user_service" {
 
   template {
     container {
-      name  = "user-service"
-      image = "${var.acr_login_server}/user-service:${var.image_tag}"
-      cpu   = 0.25
+      name   = "user-service"
+      image  = "${var.acr_login_server}/user-service:${var.image_tag}"
+      cpu    = 0.25
       memory = "0.5Gi"
-      
+
       env {
         name  = "PORT"
         value = "3001"
@@ -103,15 +103,15 @@ resource "azurerm_container_app" "user_service" {
 
 # Product Service Container App
 resource "azurerm_container_app" "product_service" {
-  name                = "${var.prefix}-product-service"
-  resource_group_name = var.resource_group_name
+  name                         = "${var.prefix}-product-service"
+  resource_group_name          = var.resource_group_name
   container_app_environment_id = var.environment_id
-  revision_mode       = "Single"
+  revision_mode                = "Single"
 
   identity {
     type = "SystemAssigned"
   }
-  
+
   registry {
     server               = var.acr_login_server
     username             = var.acr_admin_username
@@ -125,11 +125,11 @@ resource "azurerm_container_app" "product_service" {
 
   template {
     container {
-      name  = "product-service"
-      image = "${var.acr_login_server}/product-service:${var.image_tag}"
-      cpu   = 0.25
+      name   = "product-service"
+      image  = "${var.acr_login_server}/product-service:${var.image_tag}"
+      cpu    = 0.25
       memory = "0.5Gi"
-      
+
       env {
         name  = "PORT"
         value = "3002"
@@ -160,15 +160,15 @@ resource "azurerm_container_app" "product_service" {
 
 # API Gateway Container App
 resource "azurerm_container_app" "api_gateway" {
-  name                = "${var.prefix}-api-gateway"
-  resource_group_name = var.resource_group_name
+  name                         = "${var.prefix}-api-gateway"
+  resource_group_name          = var.resource_group_name
   container_app_environment_id = var.environment_id
-  revision_mode       = "Single"
+  revision_mode                = "Single"
 
   identity {
     type = "SystemAssigned"
   }
-  
+
   registry {
     server               = var.acr_login_server
     username             = var.acr_admin_username
@@ -182,11 +182,11 @@ resource "azurerm_container_app" "api_gateway" {
 
   template {
     container {
-      name  = "api-gateway"
-      image = "${var.acr_login_server}/api-gateway:${var.image_tag}"
-      cpu   = 0.25
+      name   = "api-gateway"
+      image  = "${var.acr_login_server}/api-gateway:${var.image_tag}"
+      cpu    = 0.25
       memory = "0.5Gi"
-      
+
       env {
         name  = "PORT"
         value = "8080"
@@ -205,15 +205,15 @@ resource "azurerm_container_app" "api_gateway" {
 
 # Frontend Container App
 resource "azurerm_container_app" "frontend" {
-  name                = "${var.prefix}-frontend"
-  resource_group_name = var.resource_group_name
+  name                         = "${var.prefix}-frontend"
+  resource_group_name          = var.resource_group_name
   container_app_environment_id = var.environment_id
-  revision_mode       = "Single"
+  revision_mode                = "Single"
 
   identity {
     type = "SystemAssigned"
   }
-  
+
   registry {
     server               = var.acr_login_server
     username             = var.acr_admin_username
@@ -227,11 +227,11 @@ resource "azurerm_container_app" "frontend" {
 
   template {
     container {
-      name  = "frontend"
-      image = "${var.acr_login_server}/frontend:${var.image_tag}"
-      cpu   = 0.25
+      name   = "frontend"
+      image  = "${var.acr_login_server}/frontend:${var.image_tag}"
+      cpu    = 0.25
       memory = "0.5Gi"
-      
+
       env {
         name  = "PORT"
         value = "3000"
@@ -246,10 +246,10 @@ resource "azurerm_container_app" "frontend" {
 
 output "container_apps" {
   value = {
-    user-service = azurerm_container_app.user_service.name
+    user-service    = azurerm_container_app.user_service.name
     product-service = azurerm_container_app.product_service.name
-    api-gateway = azurerm_container_app.api_gateway.name
-    frontend = azurerm_container_app.frontend.name
+    api-gateway     = azurerm_container_app.api_gateway.name
+    frontend        = azurerm_container_app.frontend.name
   }
 }
 

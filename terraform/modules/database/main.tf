@@ -51,13 +51,13 @@ resource "azurerm_postgresql_flexible_server" "main" {
   resource_group_name = var.resource_group_name
   location            = var.location
   sku_name            = var.sku_name
-  
+
   administrator_login    = var.db_username
   administrator_password = var.db_password
-  
+
   storage_mb = var.storage_mb
   version    = var.postgres_version
-  
+
   lifecycle {
     ignore_changes = [zone, high_availability]
   }

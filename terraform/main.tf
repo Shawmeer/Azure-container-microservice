@@ -28,11 +28,38 @@ resource "azurerm_resource_group" "main" {
   location = var.location
 }
 
-# Container Apps Environment (Consumption - Free Tier)
+# Module: Virtual Network and Networking
+module "networking" {
+  source = "./modules/networking"
+
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  prefix              = var.prefix
+  address_space       = ["10.0.0.0/16"]
+
+  subnet_config = [
+    {
+      name           = "container-apps-subnet"
+      address_prefix = "10.0.1.0/24"
+    },
+    {
+      name           = "database-subnet"
+      address_prefix = "10.0.2.0/24"
+    }
+  ]
+}
+
+# Container Apps Environment (Consumption - Free Tier) - With VNet integration
 resource "azurerm_container_app_environment" "main" {
   name                = "${var.prefix}env"
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
+
+  # Uncomment for VNet integration
+  # vnet_configuration {
+  #   internal_load_balancer_enabled = true
+  #   subnet_id                      = module.networking.container_apps_subnet_id
+  # }
 }
 
 # Module: Azure Container Registry (Basic SKU - $0.05/day)
@@ -44,6 +71,20 @@ module "acr" {
   prefix              = var.prefix
   sku                 = "Standard"
   admin_enabled       = true
+}
+
+# Module: Azure Key Vault
+module "keyvault" {
+  source = "./modules/keyvault"
+
+  resource_group_name       = azurerm_resource_group.main.name
+  location                  = azurerm_resource_group.main.location
+  prefix                    = var.prefix
+  sku_name                  = "standard"
+  enable_rbac_authorization = true
+
+  db_password  = var.db_password
+  acr_password = module.acr.admin_password
 }
 
 # Module: Database (PostgreSQL Flexible - Free Tier)
@@ -110,6 +151,21 @@ resource "azurerm_role_assignment" "frontend_acr_pull" {
   principal_id         = module.container_apps[0].frontend_identity
 }
 
+# Grant Key Vault Reader access to Container Apps managed identities
+resource "azurerm_role_assignment" "container_apps_key_vault_reader" {
+  count                = var.create_container_apps ? 1 : 0
+  scope                = module.keyvault.key_vault_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = module.container_apps[0].user_service_identity
+}
+
+resource "azurerm_role_assignment" "product_service_key_vault_reader" {
+  count                = var.create_container_apps ? 1 : 0
+  scope                = module.keyvault.key_vault_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = module.container_apps[0].product_service_identity
+}
+
 # Outputs
 output "acr_login_server" {
   value = module.acr.login_server
@@ -134,4 +190,28 @@ output "container_apps" {
 
 output "frontend_url" {
   value = var.create_container_apps ? module.container_apps[0].frontend_url : ""
+}
+
+output "container_apps_environment_name" {
+  value = azurerm_container_app_environment.main.name
+}
+
+output "resource_group_name" {
+  value = azurerm_resource_group.main.name
+}
+
+output "key_vault_uri" {
+  value = module.keyvault.vault_uri
+}
+
+output "key_vault_name" {
+  value = module.keyvault.vault_name
+}
+
+output "vnet_id" {
+  value = module.networking.vnet_id
+}
+
+output "vnet_name" {
+  value = module.networking.vnet_name
 }
