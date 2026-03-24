@@ -279,7 +279,7 @@ jobs:
       - name: Get database hostname
         id: db
         run: |
-          DB_HOST=$(az postgres flexible-server show -n ${{ secrets.PREFIX }}db${{ secrets.RESOURCE_GROUP }} -g ${{ secrets.RESOURCE_GROUP }} --query fullyQualifiedDomainName -o tsv)
+          DB_HOST=$(az postgres flexible-server show -n ${{ secrets.PREFIX }}dbsamir -g ${{ secrets.PREFIX }}-rg --query fullyQualifiedDomainName -o tsv)
           echo "DB_HOST=$DB_HOST" >> $GITHUB_OUTPUT
       
       # User Service
