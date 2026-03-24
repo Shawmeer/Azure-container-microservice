@@ -1,0 +1,82 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: apppassword
+      POSTGRES_DB: appdb
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d appdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  user-service:
+    build:
+      context: ./services/user-service
+    environment:
+      PORT: 3001
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: appdb
+      DB_USER: appuser
+      DB_PASSWORD: apppassword
+    expose:
+      - "3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  product-service:
+    build:
+      context: ./services/product-service
+    environment:
+      PORT: 3002
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: appdb
+      DB_USER: appuser
+      DB_PASSWORD: apppassword
+    expose:
+      - "3002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+    environment:
+      PORT: 8080
+      NODE_ENV: production
+      CORS_ORIGIN: "*"
+      USER_SERVICE_URL: http://user-service:3001
+      PRODUCT_SERVICE_URL: http://product-service:3002
+    ports:
+      - "8080:8080"
+    depends_on:
+      - user-service
+      - product-service
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      # Frontend runtime config (served via /env.js)
+      API_BASE_URL: http://localhost:8080
+    ports:
+      - "3005:3000"
+    depends_on:
+      - api-gateway
+
+volumes:
+  postgres_data:
+

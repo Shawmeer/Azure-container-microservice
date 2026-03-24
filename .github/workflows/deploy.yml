@@ -1,0 +1,321 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+  REGISTRY_NAME: ${{ secrets.REGISTRY_NAME }}
+  DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+  RESOURCE_GROUP: ${{ secrets.RESOURCE_GROUP }}
+  ENVIRONMENT: ${{ secrets.ENVIRONMENT }}
+  PREFIX: ${{ secrets.PREFIX }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+      
+      - name: Login to Azure Container Registry
+        run: |
+          az acr login -n ${{ secrets.REGISTRY_NAME }}
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      
+      - name: Build and push user-service
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/user-service
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY_NAME }}.azurecr.io/user-service:${{ github.sha }}
+            ${{ secrets.REGISTRY_NAME }}.azurecr.io/user-service:latest
+          cache-from: type=registry,ref=${{ secrets.REGISTRY_NAME }}.azurecr.io/user-service:latest
+          cache-to: type=inline
+      
+      - name: Build and push product-service
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/product-service
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY_NAME }}.azurecr.io/product-service:${{ github.sha }}
+            ${{ secrets.REGISTRY_NAME }}.azurecr.io/product-service:latest
+          cache-from: type=registry,ref=${{ secrets.REGISTRY_NAME }}.azurecr.io/product-service:latest
+          cache-to: type=inline
+      
+      - name: Build and push api-gateway
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/api-gateway
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY_NAME }}.azurecr.io/api-gateway:${{ github.sha }}
+            ${{ secrets.REGISTRY_NAME }}.azurecr.io/api-gateway:latest
+          cache-from: type=registry,ref=${{ secrets.REGISTRY_NAME }}.azurecr.io/api-gateway:latest
+          cache-to: type=inline
+      
+      - name: Build and push frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY_NAME }}.azurecr.io/frontend:${{ github.sha }}
+            ${{ secrets.REGISTRY_NAME }}.azurecr.io/frontend:latest
+          cache-from: type=registry,ref=${{ secrets.REGISTRY_NAME }}.azurecr.io/frontend:latest
+          cache-to: type=inline
+
+  terraform:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+      
+      - name: Terraform Format Check
+        run: |
+          cd terraform
+          terraform fmt -check
+      
+      - name: Terraform Init
+        run: |
+          cd terraform
+          terraform init
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      
+      - name: Terraform Validate
+        run: |
+          cd terraform
+          terraform validate
+      
+      - name: Terraform Plan
+        run: |
+          cd terraform
+          terraform plan -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+                         -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+                         -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+                         -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
+                         -var="db_password=${{ secrets.DB_PASSWORD }}" \
+                         -var="prefix=${{ secrets.PREFIX }}" \
+                         -var="location=${{ secrets.LOCATION }}" \
+                         -var="create_container_apps=false"
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      
+      - name: Terraform Apply
+        run: |
+          cd terraform
+          terraform apply -auto-approve \
+            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
+            -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -var="prefix=${{ secrets.PREFIX }}" \
+            -var="location=${{ secrets.LOCATION }}" \
+            -var="create_container_apps=false"
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+  update-container-apps:
+    needs: terraform
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+      
+      - name: Get ACR credentials
+        id: acr
+        run: |
+          ACR_PASSWORD=$(az acr credential show -n ${{ secrets.REGISTRY_NAME }} --query passwords[0].value -o tsv)
+          echo "ACR_PASSWORD=$ACR_PASSWORD" >> $GITHUB_OUTPUT
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      
+      - name: Get database hostname
+        id: db
+        run: |
+          DB_HOST=$(az postgres flexible-server show -n ${{ secrets.PREFIX }}db${{ secrets.RESOURCE_GROUP }} -g ${{ secrets.RESOURCE_GROUP }} --query fullyQualifiedDomainName -o tsv)
+          echo "DB_HOST=$DB_HOST" >> $GITHUB_OUTPUT
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Create or update user-service
+        run: |
+          if az containerapp show --name ${{ secrets.PREFIX }}-user-service --resource-group ${{ secrets.RESOURCE_GROUP }} &>/dev/null; then
+            az containerapp update \
+              --name ${{ secrets.PREFIX }}-user-service \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/user-service:latest \
+              --set-env-vars "PORT=3001" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
+          else
+            az containerapp create \
+              --name ${{ secrets.PREFIX }}-user-service \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --environment ${{ secrets.ENVIRONMENT }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/user-service:latest \
+              --cpu 0.25 --memory 0.5Gi \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ secrets.REGISTRY_NAME }} \
+              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
+              --set-env-vars "PORT=3001" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
+          fi
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Create or update product-service
+        run: |
+          if az containerapp show --name ${{ secrets.PREFIX }}-product-service --resource-group ${{ secrets.RESOURCE_GROUP }} &>/dev/null; then
+            az containerapp update \
+              --name ${{ secrets.PREFIX }}-product-service \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/product-service:latest \
+              --set-env-vars "PORT=3002" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
+          else
+            az containerapp create \
+              --name ${{ secrets.PREFIX }}-product-service \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --environment ${{ secrets.ENVIRONMENT }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/product-service:latest \
+              --cpu 0.25 --memory 0.5Gi \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ secrets.REGISTRY_NAME }} \
+              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
+              --set-env-vars "PORT=3002" "DB_HOST=${{ steps.db.outputs.DB_HOST }}" "DB_PORT=5432" "DB_NAME=appdb" "DB_USER=appuser" "DB_PASSWORD=${{ secrets.DB_PASSWORD }}"
+          fi
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Create or update api-gateway
+        run: |
+          if az containerapp show --name ${{ secrets.PREFIX }}-api-gateway --resource-group ${{ secrets.RESOURCE_GROUP }} &>/dev/null; then
+            az containerapp update \
+              --name ${{ secrets.PREFIX }}-api-gateway \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/api-gateway:latest \
+              --set-env-vars "PORT=8080" "USER_SERVICE_URL=http://${{ secrets.PREFIX }}-user-service.internal.${{ secrets.ENVIRONMENT }}" "PRODUCT_SERVICE_URL=http://${{ secrets.PREFIX }}-product-service.internal.${{ secrets.ENVIRONMENT }}"
+          else
+            az containerapp create \
+              --name ${{ secrets.PREFIX }}-api-gateway \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --environment ${{ secrets.ENVIRONMENT }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/api-gateway:latest \
+              --cpu 0.25 --memory 0.5Gi \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ secrets.REGISTRY_NAME }} \
+              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
+              --set-env-vars "PORT=8080" "USER_SERVICE_URL=http://${{ secrets.PREFIX }}-user-service.internal.${{ secrets.ENVIRONMENT }}" "PRODUCT_SERVICE_URL=http://${{ secrets.PREFIX }}-product-service.internal.${{ secrets.ENVIRONMENT }}"
+          fi
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Create or update frontend
+        run: |
+          if az containerapp show --name ${{ secrets.PREFIX }}-frontend --resource-group ${{ secrets.RESOURCE_GROUP }} &>/dev/null; then
+            az containerapp update \
+              --name ${{ secrets.PREFIX }}-frontend \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/frontend:latest \
+              --set-env-vars "PORT=3000" "API_GATEWAY_URL=https://${{ secrets.PREFIX }}-api-gateway.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
+          else
+            az containerapp create \
+              --name ${{ secrets.PREFIX }}-frontend \
+              --resource-group ${{ secrets.RESOURCE_GROUP }} \
+              --environment ${{ secrets.ENVIRONMENT }} \
+              --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/frontend:latest \
+              --cpu 0.25 --memory 0.5Gi \
+              --registry-server ${{ secrets.REGISTRY_NAME }}.azurecr.io \
+              --registry-username ${{ secrets.REGISTRY_NAME }} \
+              --registry-password "${{ steps.acr.outputs.ACR_PASSWORD }}" \
+              --set-env-vars "PORT=3000" "API_GATEWAY_URL=https://${{ secrets.PREFIX }}-api-gateway.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
+            az containerapp ingress enable --name ${{ secrets.PREFIX }}-frontend --resource-group ${{ secrets.RESOURCE_GROUP }} --type external --target-port 3000 --transport auto
+          fi
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Show frontend URL
+        run: |
+          echo "Frontend URL: https://${{ secrets.PREFIX }}-frontend.${{ secrets.ENVIRONMENT }}.azurecontainerapps.io"
+
+  notify:
+    needs: update-container-apps
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Success notification
+        if: needs.update-container-apps.result == 'success'
+        run: echo "Deployment successful!"
+      
+      - name: Failure notification
+        if: needs.update-container-apps.result == 'failure'
+        run: echo "Deployment failed! Check the workflow logs."
