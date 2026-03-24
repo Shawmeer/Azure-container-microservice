@@ -121,20 +121,6 @@ jobs:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
-      - name: Import existing resources
-        run: |
-          cd terraform
-          terraform import azurerm_resource_group.main /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP }}
-          terraform import azurerm_container_app_environment.main /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP }}/providers/Microsoft.App/managedEnvironments/${{ secrets.ENVIRONMENT }}
-          terraform import module.acr.azurerm_container_registry.main /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP }}/providers/Microsoft.ContainerRegistry/registries/${{ secrets.REGISTRY_NAME }}
-          terraform import module.database.azurerm_postgresql_flexible_server.main /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP }}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${{ secrets.PREFIX }}dbsamir
-          terraform import module.database.azurerm_postgresql_flexible_server_database.main /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.RESOURCE_GROUP }}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${{ secrets.PREFIX }}dbsamir/databases/appdb
-        env:
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-
       - name: Terraform Apply
         run: |
           cd terraform
