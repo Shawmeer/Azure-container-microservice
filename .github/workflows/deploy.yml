@@ -117,6 +117,9 @@ jobs:
             -var="image_tag=${{ github.sha }}" \
             -var="create_container_apps=false" || (
             echo "Apply failed, attempting state recovery with imports..."
+            # Clean up corrupted state
+            rm -f terraform/terraform.tfstate* 2>/dev/null || true
+            
             terraform import \
               -input=false \
               azurerm_resource_group.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg" || true
