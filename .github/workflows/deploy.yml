@@ -106,6 +106,19 @@ jobs:
         if: github.ref == 'refs/heads/main'
         working-directory: terraform
         run: |
+          # Import existing resource group if it exists
+          terraform import \
+            -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+            -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
+            -var="client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+            -var="client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
+            -var="prefix=${{ secrets.PREFIX }}" \
+            -var="location=${{ secrets.LOCATION }}" \
+            -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -var="image_tag=${{ github.sha }}" \
+            -var="create_container_apps=false" \
+            azurerm_resource_group.main "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ secrets.PREFIX }}-rg" 2>/dev/null || true
+          
           terraform apply -auto-approve \
             -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
             -var="tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
