@@ -39,6 +39,11 @@ variable "db_config" {
   sensitive = true
 }
 
+variable "image_tag" {
+  type    = string
+  default = "latest"
+}
+
 # User Service Container App
 resource "azurerm_container_app" "user_service" {
   name                = "${var.prefix}-user-service"
@@ -53,7 +58,7 @@ resource "azurerm_container_app" "user_service" {
   template {
     container {
       name  = "user-service"
-      image = "${var.acr_login_server}/user-service:latest"
+      image = "${var.acr_login_server}/user-service:${var.image_tag}"
       cpu   = 0.25
       memory = "0.5Gi"
       
@@ -99,7 +104,7 @@ resource "azurerm_container_app" "product_service" {
   template {
     container {
       name  = "product-service"
-      image = "${var.acr_login_server}/product-service:latest"
+      image = "${var.acr_login_server}/product-service:${var.image_tag}"
       cpu   = 0.25
       memory = "0.5Gi"
       
@@ -145,7 +150,7 @@ resource "azurerm_container_app" "api_gateway" {
   template {
     container {
       name  = "api-gateway"
-      image = "${var.acr_login_server}/api-gateway:latest"
+      image = "${var.acr_login_server}/api-gateway:${var.image_tag}"
       cpu   = 0.25
       memory = "0.5Gi"
       
@@ -179,7 +184,7 @@ resource "azurerm_container_app" "frontend" {
   template {
     container {
       name  = "frontend"
-      image = "${var.acr_login_server}/frontend:latest"
+      image = "${var.acr_login_server}/frontend:${var.image_tag}"
       cpu   = 0.25
       memory = "0.5Gi"
       

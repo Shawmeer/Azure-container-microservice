@@ -44,5 +44,11 @@ variable "db_password" {
 variable "create_container_apps" {
   description = "Whether to create container apps via Terraform (set to false to use Azure CLI)"
   type        = bool
-  default     = false
+  default     = true
+}
+
+variable "image_tag" {
+  description = "Docker image tag to deploy (e.g., 'latest' or commit SHA)"
+  type        = string
+  default     = "latest"
 }

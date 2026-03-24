@@ -54,8 +54,7 @@ module "database" {
   db_password         = var.db_password
 }
 
-# Module: Container Apps (optional - set create_container_apps to true to create via Terraform)
-# For production, use Azure CLI workflow instead to handle ACR auth properly
+# Module: Container Apps (set create_container_apps to true to create via Terraform)
 module "container_apps" {
   count  = var.create_container_apps ? 1 : 0
   source = "./modules/container_apps"
@@ -75,6 +74,8 @@ module "container_apps" {
     username = "appuser"
     password = var.db_password
   }
+
+  image_tag = var.image_tag
 }
 
 # Grant ACR Pull access to Container Apps via managed identity
