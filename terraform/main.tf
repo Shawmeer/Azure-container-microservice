@@ -57,7 +57,7 @@ module "database" {
 # Module: Container Apps (optional - set create_container_apps to true to create via Terraform)
 # For production, use Azure CLI workflow instead to handle ACR auth properly
 module "container_apps" {
-  count = var.create_container_apps ? 1 : 0
+  count  = var.create_container_apps ? 1 : 0
   source = "./modules/container_apps"
 
   resource_group_name = azurerm_resource_group.main.name
